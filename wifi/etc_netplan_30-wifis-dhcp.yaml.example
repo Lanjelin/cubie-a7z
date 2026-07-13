@@ -1,0 +1,11 @@
+network:
+  wifis:
+    wlan0:
+      dhcp4: yes
+      dhcp6: yes
+      regulatory-domain: NO
+      access-points:
+        "ExampleWiFi":
+          password: "replace-with-wifi-password"
+        "ExamplePhoneHotspot":
+          password: "replace-with-hotspot-password"

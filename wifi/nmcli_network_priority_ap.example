@@ -1,0 +1,6 @@
+sudo nmcli connection modify "netplan-wlan0-ExampleWiFi" connection.autoconnect-priority 10
+sudo nmcli connection modify "netplan-wlan0-ExamplePhoneHotspot" connection.autoconnect-priority 20
+sudo nmcli connection add type wifi ifname wlan0 con-name cubie-ap autoconnect no ssid "Cubie"
+sudo nmcli connection modify cubie-ap 802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared
+sudo nmcli connection modify cubie-ap wifi-sec.key-mgmt wpa-psk wifi-sec.psk "replace-with-ap-password"
+sudo nmcli connection modify cubie-ap connection.autoconnect-priority -100

@@ -1,0 +1,170 @@
+--- a/inky/inky_ssd1608.py
++++ b/inky/inky_ssd1608.py
+@@ -26,6 +26,37 @@
+ _SPI_CHUNK_SIZE = 4096
+ _SPI_COMMAND = 0
+ _SPI_DATA = 1
++
++
++class _CubieGPIO:
++    """GPIO request wrapper for the Cubie A7Z wiring."""
++
++    def __init__(self, chip0, chip1):
++        self._chip0 = chip0
++        self._chip1 = chip1
++
++    def set_value(self, line, value):
++        if line == "CS":
++            self._chip0.set_value(106, value)
++        elif line == "BUSY":
++            self._chip0.set_value(33, value)
++        elif line == "RESET":
++            self._chip1.set_value(6, value)
++        elif line == "DC":
++            self._chip1.set_value(7, value)
++        else:
++            raise ValueError("Unknown GPIO line {!r}".format(line))
++
++    def get_value(self, line):
++        if line == "BUSY":
++            return self._chip0.get_value(33)
++        raise ValueError("Unknown GPIO line {!r}".format(line))
++
++    def wait_edge_events(self, timeout):
++        return self._chip0.wait_edge_events(timeout)
++
++    def read_edge_events(self):
++        return self._chip0.read_edge_events()
+ 
+ 
+ _RESOLUTION = {
+@@ -109,6 +140,7 @@
+ 
+         self._gpio = gpio
+         self._gpio_setup = False
++        self._cubie_hw_cs = False
+ 
+         self._luts = {
+             "black": [
+@@ -132,36 +164,82 @@
+         """Set up Inky GPIO and reset display."""
+         if not self._gpio_setup:
+             if self._gpio is None:
+-                gpiochip = gpiodevice.find_chip_by_platform()
+-                gpiodevice.friendly_errors = True
+-                if gpiodevice.check_pins_available(gpiochip, {
+-                        "Chip Select": self.cs_pin,
+-                        "Data/Command": self.dc_pin,
+-                        "Reset": self.reset_pin,
+-                        "Busy": self.busy_pin
+-                    }):
+-                    self.cs_pin = gpiochip.line_offset_from_id(self.cs_pin)
+-                    self.dc_pin = gpiochip.line_offset_from_id(self.dc_pin)
+-                    self.reset_pin = gpiochip.line_offset_from_id(self.reset_pin)
+-                    self.busy_pin = gpiochip.line_offset_from_id(self.busy_pin)
+-
+-                    self._gpio = gpiochip.request_lines(consumer="inky", config={
+-                        self.cs_pin: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE, bias=Bias.DISABLED),
+-                        self.dc_pin: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.INACTIVE),
+-                        self.reset_pin: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE),
+-                        self.busy_pin: gpiod.LineSettings(direction=Direction.INPUT, edge_detection=Edge.FALLING, debounce_period=timedelta(milliseconds=10))
+-                    })
++                if self.cs_pin == "CUBIE_HW_CS":
++                    chip0 = gpiod.Chip("/dev/gpiochip0")
++                    chip1 = gpiod.Chip("/dev/gpiochip1")
++                    self._gpio = _CubieGPIO(
++                        chip0.request_lines(
++                            consumer="inky",
++                            config={
++                                33: gpiod.LineSettings(
++                                    direction=Direction.INPUT,
++                                    edge_detection=Edge.FALLING,
++                                    bias=Bias.DISABLED,
++                                ),
++                                106: gpiod.LineSettings(
++                                    direction=Direction.OUTPUT,
++                                    output_value=Value.ACTIVE,
++                                    bias=Bias.DISABLED,
++                                ),
++                            },
++                        ),
++                        chip1.request_lines(
++                            consumer="inky",
++                            config={
++                                6: gpiod.LineSettings(
++                                    direction=Direction.OUTPUT,
++                                    output_value=Value.ACTIVE,
++                                    bias=Bias.DISABLED,
++                                ),
++                                7: gpiod.LineSettings(
++                                    direction=Direction.OUTPUT,
++                                    output_value=Value.INACTIVE,
++                                    bias=Bias.DISABLED,
++                                ),
++                            },
++                        ),
++                    )
++                    self.cs_pin = "CS"
++                    self.busy_pin = "BUSY"
++                    self.reset_pin = "RESET"
++                    self.dc_pin = "DC"
++                    self._cubie_hw_cs = True
++                else:
++                    gpiochip = gpiodevice.find_chip_by_platform()
++                    gpiodevice.friendly_errors = True
++                    if gpiodevice.check_pins_available(gpiochip, {
++                            "Chip Select": self.cs_pin,
++                            "Data/Command": self.dc_pin,
++                            "Reset": self.reset_pin,
++                            "Busy": self.busy_pin
++                        }):
++                        self.cs_pin = gpiochip.line_offset_from_id(self.cs_pin)
++                        self.dc_pin = gpiochip.line_offset_from_id(self.dc_pin)
++                        self.reset_pin = gpiochip.line_offset_from_id(self.reset_pin)
++                        self.busy_pin = gpiochip.line_offset_from_id(self.busy_pin)
++
++                        self._gpio = gpiochip.request_lines(consumer="inky", config={
++                            self.cs_pin: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE, bias=Bias.DISABLED),
++                            self.dc_pin: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.INACTIVE),
++                            self.reset_pin: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.ACTIVE),
++                            self.busy_pin: gpiod.LineSettings(direction=Direction.INPUT, edge_detection=Edge.FALLING, debounce_period=timedelta(milliseconds=10))
++                        })
++                    self._cubie_hw_cs = False
+ 
+             if self._spi_bus is None:
+                 import spidev
+ 
+                 self._spi_bus = spidev.SpiDev()
+ 
+-            self._spi_bus.open(0, self.cs_channel)
+-            try:
+-                self._spi_bus.no_cs = True
+-            except OSError:
+-                warnings.warn("SPI: Cannot disable chip-select!")
++            if self._cubie_hw_cs:
++                self._spi_bus.open(1, 0)
++                self._spi_bus.no_cs = False
++            else:
++                self._spi_bus.open(0, self.cs_channel)
++                try:
++                    self._spi_bus.no_cs = True
++                except OSError:
++                    warnings.warn("SPI: Cannot disable chip-select!")
+             self._spi_bus.max_speed_hz = 488000
+ 
+             self._gpio_setup = True
+@@ -304,12 +382,8 @@
+         """
+         self._gpio.set_value(self.cs_pin, Value.INACTIVE)
+         self._gpio.set_value(self.dc_pin, Value.ACTIVE if dc else Value.INACTIVE)
+-        try:
+-            self._spi_bus.xfer3(values)
+-        except AttributeError:
+-            for x in range(((len(values) - 1) // _SPI_CHUNK_SIZE) + 1):
+-                offset = x * _SPI_CHUNK_SIZE
+-                self._spi_bus.xfer(values[offset : offset + _SPI_CHUNK_SIZE])
++        for offset in range(0, len(values), _SPI_CHUNK_SIZE):
++            self._spi_bus.xfer(values[offset : offset + _SPI_CHUNK_SIZE])
+ 
+         self._gpio.set_value(self.cs_pin, Value.ACTIVE)
+ 

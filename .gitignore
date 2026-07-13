@@ -1,0 +1,33 @@
+# Local private config
+sishc/
+.not_logged_in_yet
+wifi/etc_netplan_30-wifis-dhcp.yaml
+wifi/nmcli_network_priority_ap
+
+# Local Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python packaging/build outputs
+build/
+dist/
+*.egg-info/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor/OS noise
+.DS_Store
+*.swp
+*.swo

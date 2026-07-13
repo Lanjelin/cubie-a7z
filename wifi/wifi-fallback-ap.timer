@@ -1,0 +1,9 @@
+[Unit]
+Description=Run fallback Wi-Fi AP check after boot
+
+[Timer]
+OnBootSec=2min
+Unit=wifi-fallback-ap.service
+
+[Install]
+WantedBy=timers.target

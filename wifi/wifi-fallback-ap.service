@@ -1,0 +1,8 @@
+[Unit]
+Description=Start fallback Wi-Fi AP if no Wi-Fi connection exists
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wifi-fallback-ap.sh

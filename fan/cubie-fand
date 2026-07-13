@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+
+import time
+from pathlib import Path
+
+PWM_ENABLE = Path("/sys/class/hwmon/hwmon1/pwm1_enable")
+PWM = Path("/sys/class/hwmon/hwmon1/pwm1")
+
+THERMAL_ROOT = Path("/sys/class/thermal")
+
+IGNORE_ZONES = {"skin_zone"}
+
+CURVE = [
+    (45, 136),
+    (50, 144),
+    (55, 152),
+    (60, 160),
+    (70, 192),
+    (80, 224),
+    (88, 255),
+]
+
+MIN_PWM = 128
+
+INTERVAL = 5
+HYSTERESIS = 5
+
+
+def read_temps():
+    temps = {}
+
+    for zone in THERMAL_ROOT.glob("thermal_zone*"):
+        try:
+            zone_type = (zone / "type").read_text().strip()
+
+            if zone_type in IGNORE_ZONES:
+                continue
+
+            temp = int((zone / "temp").read_text().strip()) / 1000
+            temps[zone_type] = temp
+
+        except Exception:
+            pass
+
+    return temps
+
+
+def pwm_for_temp(temp, current_pwm):
+    target = MIN_PWM
+
+    for limit, pwm in CURVE:
+        if temp >= limit:
+            target = pwm
+
+    pwm_levels = [MIN_PWM] + [pwm for _, pwm in CURVE]
+
+    try:
+        current_level = pwm_levels.index(current_pwm)
+    except ValueError:
+        current_level = 0
+
+    try:
+        target_level = pwm_levels.index(target)
+    except ValueError:
+        target_level = 0
+
+    # Only apply hysteresis when decreasing speed
+    if target_level < current_level:
+        if current_level == 0:
+            return current_pwm
+
+        lower_limit = CURVE[current_level - 1][0]
+
+        if temp > (lower_limit - HYSTERESIS):
+            return current_pwm
+
+    return target
+
+
+def set_manual_mode():
+    try:
+        PWM_ENABLE.write_text("1\n")
+    except Exception:
+        pass
+
+
+def write_pwm(value):
+    PWM.write_text(f"{value}\n")
+
+
+def main():
+    set_manual_mode()
+
+    current_pwm = MIN_PWM
+    write_pwm(MIN_PWM)
+
+    while True:
+        temps = read_temps()
+
+        if temps:
+            hottest_zone, hottest_temp = max(
+                temps.items(),
+                key=lambda item: item[1]
+            )
+
+            target_pwm = pwm_for_temp(
+                hottest_temp,
+                current_pwm
+            )
+
+            if target_pwm != current_pwm:
+                write_pwm(target_pwm)
+                current_pwm = target_pwm
+
+                print(
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"{hottest_zone} "
+                    f"{hottest_temp:.1f}°C "
+                    f"PWM={current_pwm}",
+                    flush=True
+                )
+
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
