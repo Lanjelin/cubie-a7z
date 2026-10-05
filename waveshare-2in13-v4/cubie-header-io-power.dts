@@ -1,0 +1,8 @@
+/dts-v1/;
+/plugin/;
+
+/* VCC33-LCD supplies the header's PD (SPI1) and PJ (BUSY) banks. */
+&reg_dc1sw1 {
+    regulator-boot-on;
+    regulator-always-on;
+};

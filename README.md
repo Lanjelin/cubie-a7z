@@ -19,7 +19,7 @@ This is the intended path through the repo when bringing up a fresh Cubie A7Z:
 
 1. Flash an Armbian image for the Cubie A7Z.
 2. Optionally prepare first boot with `armbian/.not_logged_in_yet.example`.
-3. Install the SPI1 overlay and verify `/dev/spidev1.0`.
+3. For the current Waveshare display, install the `cubie-header-io-power` overlay and verify `/dev/spidev1.0`; the current base DTB already enables SPI1.
 4. Configure Wi-Fi and the fallback AP from `wifi/`.
 5. Install `fan/` if using the vendor stock cooling/fan.
 6. Test the e-paper status display with `screen-time/screen-time.py --once`.
@@ -38,8 +38,8 @@ The Cubie A7Z enclosure files live in [`print-files/`](print-files/). That folde
 | `fan/` | A simple PWM fan daemon for the Cubie A7Z plus a systemd unit. The daemon reads thermal zones, ignores `skin_zone`, and writes `/sys/class/hwmon/hwmon1/pwm1` using a small temperature curve. |
 | `wifi/` | NetworkManager/netplan notes for normal Wi-Fi plus a fallback access point. The timer/service waits after boot and starts the `cubie-ap` connection if `wlan0` never gets an IPv4 address or active Wi-Fi client connection. |
 | `inky-fix/` | The older Pimoroni Inky pHAT bring-up path. Includes the Cubie A7Z patch, SPI1 overlay source/compiled DTBO, and minimal examples for the SSD1608 pHAT driver. |
-| `waveshare-2in13-v4/` | Waveshare 2.13 inch e-Paper HAT+ V4 experiments. Includes a trimmed vendored `waveshare_epd/` driver copy, test scripts, and the same SPI1 overlay assets. |
-| `screen-time/` | The current Waveshare-based status display project. It bundles the patched Waveshare driver, SPI1 overlay assets, minimal Python requirements, and `screen-time.py`, which renders a landscape status screen and uses partial refreshes with periodic full refreshes. |
+| `waveshare-2in13-v4/` | Waveshare 2.13 inch e-Paper HAT+ V4 bring-up. Includes a trimmed vendored `waveshare_epd/` driver copy, examples, and the `cubie-header-io-power.dts` source. |
+| `screen-time/` | The current Waveshare-based status display project. It bundles the patched Waveshare driver, header power overlay source, minimal Python requirements, and `screen-time.py`, which renders a landscape status screen and uses partial refreshes with periodic full refreshes. |
 | `print-files/` | Printable Cubie A7Z enclosure files: editable CAD, STEP export, print-ready 3MF files, screenshots, photos, and feature notes in `print-files/README.md`. |
 
 ## Armbian notes
@@ -60,32 +60,57 @@ Typical flow for first boot:
 4. Replace every placeholder value before booting. Armbian stores these values in plaintext, including Wi-Fi and user/root passwords.
 5. Boot the Cubie A7Z and let Armbian consume the file during first boot.
 
-## SPI1 and e-paper overlay
+## Current Waveshare header power overlay
 
-The e-paper work depends on a custom SPI1 overlay that exposes `/dev/spidev1.0` and the Cubie-specific GPIO mapping used by the display drivers.
+The current kernel base DTB already enables SPI1 with native `PD10`–`PD13` pinctrl and one `spidev@0`, exposing `/dev/spidev1.0`. Do not load the old manual-CS SPI overlay for the current Waveshare setup. The necessary recovery is to keep the header I/O-bank power switch enabled.
 
-The repeated overlay files are:
+The confirmed black/white Waveshare 2.13inch V4 HAT mapping is:
 
-- `spi1-spidev-manual-cs.dts` — source overlay
-- `sun60iw2p1-spi1-spidev-manual-cs.dtbo` — compiled overlay
+| Signal | Header pin | GPIO/controller |
+| --- | --- | --- |
+| Reset | 11 | `PB1`, `gpiochip0` offset `33` |
+| BUSY | 18 | `PJ25`, `gpiochip0` offset `313` |
+| DC | 22 | `PL5`, `gpiochip1` offset `5` |
+| CS | 24 | `PD10`, native SPI1 chip select owned by the kernel |
 
-Install the compiled overlay on Armbian at:
+Offsets are local to each gpiochip, not BCM numbers. The backend sets `CS_PIN=None`, leaving GPIO CS writes as no-ops; never request `PD10` with gpiod. SPI uses bus `1`, device `0`, mode `0`, `500000` Hz and `no_cs=False`.
 
-```text
-/boot/overlay-user/sun60iw2p1-spi1-spidev-manual-cs.dtbo
-```
+`screen-time/cubie-header-io-power.dts` (also preserved in `waveshare-2in13-v4/`) adds only `regulator-boot-on` and `regulator-always-on` to `&reg_dc1sw1`. This enables `VCC33-LCD`/`SWOUT1` power for the PD (SPI1) and PJ (BUSY) banks without changing pinctrl or disabling Wi-Fi. The deployed application in `/opt/screen-time` does not need an overlay source or compiled DTBO at runtime; keep the checked-in source for rebuilding the boot overlay.
 
-Then add this to `/boot/armbianEnv.txt`:
-
-```ini
-user_overlays=sun60iw2p1-spi1-spidev-manual-cs
-```
-
-Reboot and verify:
+From the repository root:
 
 ```bash
-ls /dev/spidev1.0
+dtc -@ -I dts -O dtb -o screen-time/cubie-header-io-power.dtbo screen-time/cubie-header-io-power.dts
+sudo install -d /boot/overlay-user
+sudo install -m 0644 screen-time/cubie-header-io-power.dtbo /boot/overlay-user/cubie-header-io-power.dtbo
+sudo nano /boot/armbianEnv.txt
 ```
+
+Edit the existing `user_overlays` line, removing the obsolete `sun60iw2p1-spi1-spidev-manual-cs` token and adding `cubie-header-io-power`. Preserve any unrelated tokens. With no unrelated overlays:
+
+```ini
+user_overlays=cubie-header-io-power
+```
+
+Keep Wi-Fi enabled; no Wi-Fi disable overlay is needed. Reboot to apply the boot-time power change:
+
+```bash
+sudo reboot
+```
+
+After reconnecting, verify the SPI node and follow `screen-time/README.md` for dependencies, a `screen-time.py --once` run, and service installation. A present SPI node alone does not prove that the header banks are powered.
+
+### Apt-upgrade regression and confirmed recovery
+
+The upgraded base DTB omitted the original Radxa board DTS's `regulator-boot-on` for `dc1sw1`. SPI1 remained enabled, and GPIO/pinctrl source was unchanged, but `dc1sw1` was disabled while its parent `DCDC1` still supplied 3.3 V. The resulting unpowered `VCC33-LCD` header banks caused the display failure.
+
+With `cubie-header-io-power` and native CS, the recovery diagnostic showed BUSY rising and a full refresh of `2.283 s`; visible panel updates were confirmed. The deployed status application also completed full and partial refreshes, with a partial-refresh BUSY wait of about `0.60 s`. The installed recovery uses `user_overlays=cubie-header-io-power` and preserves Wi-Fi.
+
+References: [Radxa A7Z schematic v1.11, pages 4 and 7](https://dl.radxa.com/cubie/a7z/docs/hw/radxa_cubie_a7z_schematic_v1.11.pdf) and [original Radxa board DTS](https://github.com/radxa/allwinner-device/blob/device-a733-v1.4.8/configs/cubie_a7z/linux-6.6/board.dts).
+
+### Historical Inky overlay path
+
+`inky-fix/` retains its old `spi1-spidev-manual-cs.dts` and `sun60iw2p1-spi1-spidev-manual-cs.dtbo` for the older Pimoroni bring-up path. Those assets are historical and are not the active Waveshare overlay; do not load them alongside the current native-CS base DTB. They have intentionally been left intact.
 
 ## Display work
 

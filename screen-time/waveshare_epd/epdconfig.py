@@ -36,7 +36,7 @@ import subprocess
 from ctypes import *
 
 import gpiod
-from gpiod.line import Bias, Direction, Edge, Value
+from gpiod.line import Bias, Direction, Value
 
 logger = logging.getLogger(__name__)
 
@@ -170,15 +170,18 @@ class RaspberryPi:
 
 
 class CubieA7Z:
-    # Waveshare 2.13in V4 HAT physical header pins on Cubie A7Z:
-    #   RST  -> PIN_11 -> gpiochip0 line 33
-    #   BUSY -> PIN_18 -> gpiochip0 line 313
-    #   DC   -> PIN_22 -> gpiochip1 line 5
-    #   CS   -> PIN_24 -> gpiochip0 line 106
-    RST_PIN  = 33
+    # Cubie A7Z wiring from the Waveshare V4 / Radxa pinout:
+    #   DC   -> gpiochip1 line 5   (PL5, physical pin 22)
+    #   RST  -> gpiochip0 line 33  (PB1, physical pin 11)
+    #   BUSY -> gpiochip0 line 313 (PJ25, physical pin 18)
+    #   SPI  -> spidev1.0, native CS on PD10 (physical pin 24)
+    #
+    # Chip select is handled by SPI1, not a userspace GPIO or manual-CS overlay.
+    # The 2.13 V4 panel is active-low CS, SPI mode 0 at 500 kHz.
     DC_PIN   = 5
-    CS_PIN   = 106
+    RST_PIN  = 33
     BUSY_PIN = 313
+    CS_PIN   = None
     PWR_PIN  = None
 
     def __init__(self):
@@ -195,8 +198,6 @@ class CubieA7Z:
             self.GPIO0.set_value(self.RST_PIN, state)
         elif pin == self.DC_PIN:
             self.GPIO1.set_value(self.DC_PIN, state)
-        elif pin == self.CS_PIN:
-            self.GPIO0.set_value(self.CS_PIN, state)
 
     def digital_read(self, pin):
         if pin == self.BUSY_PIN:
@@ -219,20 +220,14 @@ class CubieA7Z:
             self.GPIO0 = gpiod.Chip('/dev/gpiochip0').request_lines(
                 consumer='waveshare_epd',
                 config={
-                    self.BUSY_PIN: gpiod.LineSettings(
-                        direction=Direction.INPUT,
-                        edge_detection=Edge.BOTH,
-                        active_low=False,
-                        bias=Bias.DISABLED,
-                    ),
-                    self.CS_PIN: gpiod.LineSettings(
-                        direction=Direction.OUTPUT,
-                        output_value=Value.ACTIVE,
-                        bias=Bias.DISABLED,
-                    ),
                     self.RST_PIN: gpiod.LineSettings(
                         direction=Direction.OUTPUT,
                         output_value=Value.ACTIVE,
+                        bias=Bias.DISABLED,
+                    ),
+                    self.BUSY_PIN: gpiod.LineSettings(
+                        direction=Direction.INPUT,
+                        active_low=False,
                         bias=Bias.DISABLED,
                     ),
                 },
@@ -248,7 +243,7 @@ class CubieA7Z:
                 },
             )
             self.SPI.open(1, 0)
-            self.SPI.max_speed_hz = 4000000
+            self.SPI.max_speed_hz = 500000
             self.SPI.mode = 0b00
             self.SPI.bits_per_word = 8
             self.SPI.cshigh = False
@@ -264,14 +259,17 @@ class CubieA7Z:
         self.Flag = 0
 
         if self.GPIO0 is not None:
-            self.GPIO0.set_value(self.CS_PIN, Value.ACTIVE)
-            self.GPIO0.set_value(self.RST_PIN, Value.INACTIVE)
+            self.GPIO0.set_value(self.RST_PIN, Value.ACTIVE)
             self.GPIO0.release()
             self.GPIO0 = None
         if self.GPIO1 is not None:
             self.GPIO1.set_value(self.DC_PIN, Value.INACTIVE)
             self.GPIO1.release()
             self.GPIO1 = None
+
+
+
+
 
 
 class JetsonNano:
