@@ -3,8 +3,7 @@
 import time
 from pathlib import Path
 
-PWM_ENABLE = Path("/sys/class/hwmon/hwmon1/pwm1_enable")
-PWM = Path("/sys/class/hwmon/hwmon1/pwm1")
+HWMON_ROOT = Path("/sys/class/hwmon")
 
 THERMAL_ROOT = Path("/sys/class/thermal")
 
@@ -24,6 +23,21 @@ MIN_PWM = 128
 
 INTERVAL = 5
 HYSTERESIS = 5
+
+
+def find_fan():
+    for hwmon in sorted(HWMON_ROOT.glob("hwmon*")):
+        try:
+            name = (hwmon / "name").read_text().strip()
+        except OSError:
+            continue
+
+        if name == "pwmfan" and (hwmon / "pwm1").is_file():
+            return hwmon
+
+    raise FileNotFoundError(
+        "No pwmfan hwmon device; install the cubie-pwm-fan overlay and reboot"
+    )
 
 
 def read_temps():
@@ -77,22 +91,14 @@ def pwm_for_temp(temp, current_pwm):
     return target
 
 
-def set_manual_mode():
-    try:
-        PWM_ENABLE.write_text("1\n")
-    except Exception:
-        pass
-
-
-def write_pwm(value):
-    PWM.write_text(f"{value}\n")
-
-
 def main():
-    set_manual_mode()
+    fan = find_fan()
+    pwm = fan / "pwm1"
+    # pwm-fan mode 1 keeps PWM enabled for nonzero duty cycles.
+    (fan / "pwm1_enable").write_text("1\n")
 
     current_pwm = MIN_PWM
-    write_pwm(MIN_PWM)
+    pwm.write_text(f"{MIN_PWM}\n")
 
     while True:
         temps = read_temps()
@@ -109,7 +115,7 @@ def main():
             )
 
             if target_pwm != current_pwm:
-                write_pwm(target_pwm)
+                pwm.write_text(f"{target_pwm}\n")
                 current_pwm = target_pwm
 
                 print(

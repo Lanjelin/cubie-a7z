@@ -1,0 +1,36 @@
+/dts-v1/;
+/plugin/;
+
+/* VCC33-LCD powers the PJ bank, including the fan's PJ27 control pin. */
+&reg_dc1sw1 {
+    regulator-boot-on;
+    regulator-always-on;
+};
+
+&pwm1_9_pins_active {
+    pins = "PJ27";
+    function = "pwm1_9";
+    drive-strength = <10>;
+};
+
+&pwm1_9_pins_sleep {
+    pins = "PJ27";
+    function = "gpio_in";
+    bias-pull-down;
+};
+
+&pwm1_9 {
+    status = "okay";
+};
+
+&pwm1 {
+    status = "okay";
+};
+
+&{/} {
+    pwm-fan {
+        compatible = "pwm-fan";
+        pwms = <&pwm1 9 25000 0>;
+        /* J6 has fixed 5 V power; cubie-fand owns the PWM temperature curve. */
+    };
+};
